@@ -357,7 +357,7 @@ registerDoParallel(4)
 set.seed(1234)
 loop_group_files <- c("group_winners1.csv", "group_winners2.csv", "group_winners3.csv", "group_winners4.csv")
 loop_winners_files <- c("winners1.csv", "winners2.csv", "winners3.csv", "winners4.csv")
-M <- 250
+M <- 2500
 results_list <- foreach(i = 1:4) %dopar% {
   group_file <- loop_group_files[i]
   winners_file <- loop_winners_files[i]
@@ -395,24 +395,24 @@ results_list <- foreach(i = 1:4) %dopar% {
     final <- simulate_match(r4_1,r4_2)
     
     readr::write_csv(as.tibble(t(c(k,"A",winners_A)))%>%setNames(c("iteration","Group","First", "Second")), 
-                     file = paste0("results/",group_file), append = TRUE)
+                     file = paste0("results_10000/",group_file), append = TRUE)
     readr::write_csv(as.tibble(t(c(k,"B",winners_B)))%>%setNames(c("iteration","Group","First", "Second")),
-                     file = paste0("results/",group_file), append = TRUE)
+                     file = paste0("results_10000/",group_file), append = TRUE)
     readr::write_csv(as.tibble(t(c(k,"C",winners_C)))%>%setNames(c("iteration","Group","First", "Second")),
-                     file = paste0("results/",group_file), append = TRUE)
+                     file = paste0("results_10000/",group_file), append = TRUE)
     readr::write_csv(as.tibble(t(c(k,"D",winners_D)))%>%setNames(c("iteration","Group","First", "Second")),
-                     file = paste0("results/",group_file), append = TRUE)
+                     file = paste0("results_10000/",group_file), append = TRUE)
     readr::write_csv(as.tibble(t(c(k,"E",winners_E)))%>%setNames(c("iteration","Group","First", "Second")),
-                     file = paste0("results/",group_file), append = TRUE)
+                     file = paste0("results_10000/",group_file), append = TRUE)
     readr::write_csv(as.tibble(t(c(k,"F",winners_F)))%>%setNames(c("iteration","Group","First", "Second")),
-                     file = paste0("results/",group_file), append = TRUE)
+                     file = paste0("results_10000/",group_file), append = TRUE)
     readr::write_csv(as.tibble(t(c(k,"G",winners_G)))%>%setNames(c("iteration","Group","First", "Second")),
-                     file = paste0("results/",group_file), append = TRUE)
+                     file = paste0("results_10000/",group_file), append = TRUE)
     readr::write_csv(as.tibble(t(c(k,"H",winners_H)))%>%setNames(c("iteration","Group","First", "Second")),
-                     file = paste0("results/",group_file), append = TRUE)
+                     file = paste0("results_10000/",group_file), append = TRUE)
     
     readr::write_csv(as.tibble(final)%>%setNames(c("Winner")),
-                     file = paste0("results/",winners_file), append = TRUE) 
+                     file = paste0("results_10000/",winners_file), append = TRUE) 
   }
 }
 
@@ -422,7 +422,7 @@ results_list <- foreach(i = 1:4) %dopar% {
 
 ```{r}
 total <- M*4
-paste0("results/",loop_winners_files)%>%
+paste0("results_10000/",loop_winners_files)%>%
   sapply(read_csv, col_names = FALSE, simplify = FALSE) %>%
     bind_rows()%>%
   setNames("Team")%>%
@@ -430,13 +430,16 @@ paste0("results/",loop_winners_files)%>%
   summarise(prob_win = n()/total)%>%
   arrange(desc(prob_win))%>%
   ggplot(aes(x=prob_win,y=reorder(Team,prob_win)))+
-  geom_bar(stat = "identity")
+  geom_bar(stat = "identity") +
+  labs(x="",
+       y="probability",
+       title = "Probability of winning the World Cup")
 ```
 
 # Analyze group winners
 
 ```{r}
-paste0("results/",loop_group_files)%>%
+paste0("results_10000/",loop_group_files)%>%
   sapply(read_csv, col_names = FALSE, simplify = FALSE) %>%
     bind_rows()%>%
   setNames(c("iteration", "Group", "First", "Second"))%>%
