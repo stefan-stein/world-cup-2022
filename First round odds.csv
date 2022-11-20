@@ -1,0 +1,49 @@
+Group,Home,Away,Home win,Draw,Away win
+A,Qatar,Ecuador,3.7,3.13,2.38
+B,England,Iran,1.34,5,14
+A,Senegal,Netherlands,7.2,4.1,1.58
+B,USA,Wales,2.45,3.13,3.47
+C,Argentina,Saudi Arabia,1.18,8.2,23
+D,Denmark,Tunisia,1.5,4.3,8.4
+C,Mexico,Poland,2.85,3.14,2.9
+D,France,Australia,1.32,6,12
+F,Morocco,Croatia,4.1,3.25,2.11
+E,Germany,Japan,1.51,4.7,7
+E,Spain,Costa Rica,1.18,8,23
+F,Belgium,Canada,1.55,4.5,6.75
+G,Switzerland,Cameroon,1.76,3.65,5.7
+H,Uruguay,South Korea,1.83,3.6,5.4
+H,Portugal,Ghana,1.4,4.9,10
+G,Brazil,Serbia,1.49,4.7,7.6
+B,Wales,Iran,2.44,3.3,3.41
+A,Qatar,Senegal,3.6,3.29,2.3
+A,Netherlands,Ecuador,1.64,4.1,6.5
+B,England,USA,1.63,4.1,6.3
+D,Tunisia,Australia,2.68,3.2,3.03
+C,Poland,Saudi Arabia,1.67,3.93,6.3
+D,France,Denmark,2.15,3.3,4.1
+C,Argentina,Mexico,1.53,4.3,8
+E,Japan,Costa Rica,1.67,3.95,6.4
+F,Belgium,Morocco,1.63,4.2,6
+F,Croatia,Canada,1.76,3.8,5.3
+E,Spain,Germany,2.6,3.6,2.8
+G,Cameroon,Serbia,5.6,3.73,1.8
+H,South Korea,Ghana,2.6,3.15,3.16
+G,Brazil,Switzerland,1.5,4.6,7.6
+H,Portugal,Uruguay,2.16,3.47,3.85
+A,Ecuador,Senegal,2.8,3.27,2.78
+A,Netherlands,Qatar,1.28,6.75,14
+B,Iran,USA,4,3.55,2.05
+B,Wales,England,6.25,4.1,1.63
+D,Tunisia,France,14,5.3,1.35
+D,Australia,Denmark,7.5,4.5,1.55
+C,Saudi Arabia,Mexico,5.6,3.8,1.72
+C,Poland,Argentina,5.8,4,1.72
+F,Croatia,Belgium,3.6,3.5,2.25
+F,Canada,Morocco,3.3,3.41,2.4
+E,Japan,Spain,8.5,4.75,1.51
+E,Costa Rica,Germany,15,6.4,1.28
+H,South Korea,Portugal,7.5,4.3,1.63
+H,Ghana,Uruguay,5.3,3.64,1.83
+G,Serbia,Switzerland,2.85,3.4,2.77
+G,Cameroon,Brazil,15,6.7,1.25

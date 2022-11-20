@@ -1,0 +1,459 @@
+---
+title: "World Cup 2022 Predictions"
+author:
+  - Ian Hamilton
+  - Stefan Stein
+  - David Selby
+date: November 2022
+output:
+  html_document:
+    df_print: kable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, echo = TRUE)
+```
+
+Libraries.
+
+```{r}
+library(tidyverse)
+library(igraph)
+library(parallel)
+```
+
+Our aim has been to create a decent prediction model from publicly available data in the most parsimonious way possible in terms of the data used and the models employed. The predictions rely on only 134 individual items of data (108 group match odds + 26 outright odds) and two linear regression model fits. 
+
+In order to do this we will be applying a Bradley-Terry model in the sense that we assume that the probability that a team $i$ beats a team $j$ is
+\[ 
+p_{ij} = \frac{\pi_i}{\pi_i + \pi_j},
+\]
+where $\pi_i$ is the strength of team $i$.
+
+In the first part we use the group stage match probabilities to estimate intra-group strengths $s_i$ by noting that 
+\[
+\log(p_{ij} / p_{ji}) = \log(s_i / s_j) = r_i - r_j,
+\]
+where $r_i = log(s_i)$.
+
+We begin by rescaling the odds so that the implied match outcome probabilities add to one.
+
+```{r}
+df <- read_csv("First round odds.csv") %>%
+  rename("odds_1" = "Home win", "odds_draw" = "Draw", "odds_2" = "Away win", "TeamName1" = "Home", "TeamName2" = "Away") %>%
+  mutate(p_ij = 1 / odds_1,
+         p_draw = 1 / odds_draw,
+         p_ji = 1/ odds_2,
+         total_prob = p_ij + p_draw + p_ji) %>%
+  mutate(p_ij = p_ij / total_prob,
+         p_draw = p_draw / total_prob,
+         p_ji = p_ji / total_prob) %>%
+  select(-total_prob) %>%
+  mutate(logit_p_ij = log(p_ij / p_ji))
+
+df
+```
+
+We then estimate the intra-group strength parameters by linear regression, starting with constructing an appropriate adjacency matrix,
+
+```{r}
+makeX_lm <- function(df){
+  X_lm <- matrix(0,
+                 nrow(df),
+                 length(levels(factor(as.character(df$TeamName1)))))
+  colnames(X_lm) <- levels(factor(as.character(df$TeamName1)))
+  for (team in colnames(X_lm)) {
+    X_lm[df$TeamName1 == team, team] <- 1
+    X_lm[df$TeamName2 == team, team] <- -1
+  }
+  return(X_lm)
+}
+
+df$X <- makeX_lm(df)
+```
+
+then fitting the linear model.
+
+```{r}
+lmfit_group <- lm(logit_p_ij ~ -1 + X, data = df)
+
+r <- coef(lmfit_group)
+r[is.na(r)] <- 0
+r
+s <- exp(r)
+```
+
+We now need to recognise that different groups will be of different strengths and so these intra-group strengths need scaling so they can be used to compare teams from different groups.
+
+Under Bradley--Terry, the probability of $i$ winning the final, given $i$ has made it to the final, is
+\[
+q_{io} = \pi_i / (\pi_i + \pi_o),
+\]
+where $\pi_i$ is the strength of team $i$ and $\pi_o$ is the strength of the final opponent, since there are so many permutations by which a final opponent may be determined for all teams.
+The opponent strength $\pi_o$ is assumed to be the same for all teams, so
+\begin{equation}
+\text{logit}(q_{io}) = \lambda_i - \lambda_o
+\end{equation}
+where $\lambda_i = \log \pi_i$.
+We have the intra-group strengths $s_i$, but we do not know the relative strengths of the groups.
+Suppose group $G$ has strength $\gamma_G$ such that $s_i = \gamma_{G(i)} \pi_i$ where $G(i)$ is $i$'s group.
+Then
+\begin{equation}
+\lambda_i = \log \pi_i = \log s_i - \log \gamma_{G(i)} = r_i - \lambda_{G(i)}
+\end{equation}
+where $\lambda_{G(i)} = \log \gamma_{G(i)}$.
+So combining (1) and (2) we have
+\[
+r_i - \text{logit}(q_{io}) = \lambda_{G(i)} + \lambda_o.
+\]
+So we estimate $\lambda_o$ and the $\lambda_G$ by regressing against $r_i - \text{logit}(q_{io})$.
+
+```{r}
+# take tournament win odds and translate to tournament win odds
+
+
+winner <- read_csv("Winner odds.csv")%>%
+  # filter(Odds < 100)%>%
+  mutate(p_i = 1 / Odds,
+         total_prob = sum(p_i))%>%
+  mutate(p_i = p_i / total_prob)%>%
+  select(Group, Team, p_i)%>%
+  # select(Team, p_i)%>%
+  rename("pi_win" = "p_i")%>%
+  left_join(
+    read_csv("Reach final odds.csv")%>%
+      mutate(p_i = 1 / Odds,
+             total_prob = sum(p_i))%>%
+      mutate(p_i = 2*p_i / total_prob)%>%
+      select(Team, p_i)%>%
+      rename("pi_final" = "p_i"),
+    by = "Team"
+  )%>%
+  # calculate the conditional probability of winning given you make the final
+  mutate(q_io = pi_win / pi_final)%>%
+  left_join(
+    as.data.frame(r)%>%
+      rownames_to_column("Team")%>%
+      mutate(Team = str_remove(Team, "^X")),
+    by = "Team"
+  )
+
+
+```
+
+```{r}
+
+y <- winner$r - qlogis(winner$q_io)
+
+X <- matrix(0,
+            nrow(winner),
+            length(unique(winner$Group)))
+colnames(X) <- sort(unique(winner$Group))
+rownames(X) <- winner$Team
+for (group in colnames(X)) {
+  X[winner$Group == group, group] <- 1
+}
+X
+
+lmfit_win <- lm(y ~ X)
+```
+
+Where probability of winning is small, we make an adjustment according to a threshold, since the $q_io$ for low probability teams may be highly unreliable.
+
+```{r}
+cut <- subset(winner, pi_win > 0.03)
+
+y2 <- cut$r - qlogis(cut$q_io)
+X2 <- matrix(0,
+            nrow(cut),
+            length(unique(cut$Group)))
+colnames(X2) <- sort(unique(cut$Group))
+rownames(X2) <- cut$Team
+for (group in colnames(X2)) {
+  X2[cut$Group == group, group] <- 1
+}
+X2
+
+lmfit_win <- lm(y2 ~ X2) # NOTE: this replaces lmfit_win above
+```
+
+```{r}
+lambda_G <- coef(lmfit_win)
+lambda_G[is.na(lambda_G)] <- 0
+names(lambda_G) <- c("O", "A", "B", "C", "D", "E", "F", "G", "H")
+lambda_G
+```
+
+Get the team coefficients $\lambda_i = r_i - \lambda_{G(i)}$
+
+```{r}
+lambda <- setNames(winner$r - lambda_G[winner$Group], winner$Team)
+lambda
+```
+
+Then calculate the probabilities from the $\lambda$s
+
+```{r}
+probs <- plogis(outer(lambda, lambda, '-'))
+probs
+```
+
+
+# Simulation
+
+```{r}
+# simulate the group stage given the group name
+simulate_group <- function(group_letter) {
+  probs <- df%>%
+    filter(Group == group_letter)%>%
+    rowwise()%>%
+    mutate(result = sample(c(3,-3,1),size=1,prob = c(p_ij,p_ji,p_draw)))
+  
+  group_winners <- probs%>%select(TeamName1, result)%>%rename("team" = "TeamName1")%>%
+    rbind(probs%>%select(TeamName2, result)%>%rename("team" = "TeamName2")%>%mutate(result = ifelse(abs(result)>1, -1*result, result)))%>%
+    ungroup()%>%
+    filter(result > 0)%>%
+    group_by(team)%>%
+    summarise(points = sum(result))%>%
+    arrange(desc(points))%>%
+    head(2)%>%
+    pull(team)
+  return(group_winners)
+}
+```
+
+```{r}
+winners_A <- simulate_group("A")
+winners_B <- simulate_group("B")
+winners_C <- simulate_group("C")
+winners_D <- simulate_group("D")
+winners_E <- simulate_group("E")
+winners_F <- simulate_group("F")
+winners_G <- simulate_group("G")
+winners_H <- simulate_group("H")
+
+# get_match_probs <- function(lu_string){
+#   output%>%
+#     filter(lookup_string==lu_string)
+# }
+simulate_match <- function(team1,team2){
+  p_ij <- probs[team1,team2]
+  sample(c(team1,team2),size = 1, prob = c(p_ij, 1 - p_ij))
+}
+
+```
+
+```{r}
+
+# round of 16
+r16_1 <- simulate_match(winners_A[1],winners_B[2])
+r16_2 <- simulate_match(winners_C[1],winners_D[2])
+r16_3 <- simulate_match(winners_E[1],winners_F[2])
+r16_4 <- simulate_match(winners_G[1],winners_H[2])
+r16_5 <- simulate_match(winners_B[1],winners_A[2])
+r16_6 <- simulate_match(winners_D[1],winners_C[2])
+r16_7 <- simulate_match(winners_F[1],winners_E[2])
+r16_8 <- simulate_match(winners_H[1],winners_G[2])
+
+```
+
+
+```{r}
+# round of 8
+r8_1 <- simulate_match(r16_1,r16_2)
+r8_2 <- simulate_match(r16_3,r16_4)
+r8_3 <- simulate_match(r16_5,r16_6)
+r8_4 <- simulate_match(r16_7,r16_8)
+```
+
+```{r}
+# semi-finals
+r4_1 <- simulate_match(r8_1,r8_2)
+r4_2 <- simulate_match(r8_3,r8_4)
+```
+
+```{r}
+final <- simulate_match(r4_1,r4_2)
+final
+```
+
+
+# Simulate whole tournament
+
+```{r}
+simulate_tournament <- function(x){
+  
+  # group stage
+  winners_A <- simulate_group("A")
+  winners_B <- simulate_group("B")
+  winners_C <- simulate_group("C")
+  winners_D <- simulate_group("D")
+  winners_E <- simulate_group("E")
+  winners_F <- simulate_group("F")
+  winners_G <- simulate_group("G")
+  winners_H <- simulate_group("H")
+  
+  # round of 16
+  r16_1 <- simulate_match(winners_A[1],winners_B[2])
+  r16_2 <- simulate_match(winners_C[1],winners_D[2])
+  r16_3 <- simulate_match(winners_E[1],winners_F[2])
+  r16_4 <- simulate_match(winners_G[1],winners_H[2])
+  r16_5 <- simulate_match(winners_B[1],winners_A[2])
+  r16_6 <- simulate_match(winners_D[1],winners_C[2])
+  r16_7 <- simulate_match(winners_F[1],winners_E[2])
+  r16_8 <- simulate_match(winners_H[1],winners_G[2])
+  
+  # round of 8
+  r8_1 <- simulate_match(r16_1,r16_2)
+  r8_2 <- simulate_match(r16_3,r16_4)
+  r8_3 <- simulate_match(r16_5,r16_6)
+  r8_4 <- simulate_match(r16_7,r16_8)
+  
+  # semi-finals
+  r4_1 <- simulate_match(r8_1,r8_2)
+  r4_2 <- simulate_match(r8_3,r8_4)
+  
+  final <- simulate_match(r4_1,r4_2)
+  
+  # readr::write_csv(as.tibble(t(c(i,"A",winners_A)))%>%setNames(c("iteration","Group","First", "Second")), 
+  #                  file = "results/fn_group_winners.csv", append = TRUE)
+  # readr::write_csv(as.tibble(t(c(i,"B",winners_B)))%>%setNames(c("iteration","Group","First", "Second")),
+  #                  file = "results/fn_group_winners.csv", append = TRUE)
+  # readr::write_csv(as.tibble(t(c(i,"C",winners_C)))%>%setNames(c("iteration","Group","First", "Second")),
+  #                  file = "results/fn_group_winners.csv", append = TRUE)
+  # readr::write_csv(as.tibble(t(c(i,"D",winners_D)))%>%setNames(c("iteration","Group","First", "Second")),
+  #                  file = "results/fn_group_winners.csv", append = TRUE)
+  # readr::write_csv(as.tibble(t(c(i,"E",winners_E)))%>%setNames(c("iteration","Group","First", "Second")),
+  #                  file = "results/fn_group_winners.csv", append = TRUE)
+  # readr::write_csv(as.tibble(t(c(i,"F",winners_F)))%>%setNames(c("iteration","Group","First", "Second")),
+  #                  file = "results/fn_group_winners.csv", append = TRUE)
+  # readr::write_csv(as.tibble(t(c(i,"G",winners_G)))%>%setNames(c("iteration","Group","First", "Second")),
+  #                  file = "results/fn_group_winners.csv", append = TRUE)
+  # readr::write_csv(as.tibble(t(c(i,"H",winners_H)))%>%setNames(c("iteration","Group","First", "Second")),
+  #                  file = "results/fn_group_winners.csv", append = TRUE)
+  # 
+  # readr::write_csv(as.tibble(final)%>%setNames(c("Winner")),
+  #                  file = "results/fn_winners.csv", append = TRUE)  
+  
+  return(final)
+}
+```
+
+
+```{r}
+set.seed(1234)
+M <- 10
+sim_results <- mclapply(1:M,FUN=simulate_tournament,mc.cores = 4)
+simplify2array(sim_results)
+```
+
+```{r}
+library(doParallel)
+registerDoParallel(4)
+```
+
+
+```{r}
+set.seed(1234)
+loop_group_files <- c("group_winners1.csv", "group_winners2.csv", "group_winners3.csv", "group_winners4.csv")
+loop_winners_files <- c("winners1.csv", "winners2.csv", "winners3.csv", "winners4.csv")
+M <- 250
+results_list <- foreach(i = 1:4) %dopar% {
+  group_file <- loop_group_files[i]
+  winners_file <- loop_winners_files[i]
+  for (k in 1:M) {
+    # group stage
+    winners_A <- simulate_group("A")
+    winners_B <- simulate_group("B")
+    winners_C <- simulate_group("C")
+    winners_D <- simulate_group("D")
+    winners_E <- simulate_group("E")
+    winners_F <- simulate_group("F")
+    winners_G <- simulate_group("G")
+    winners_H <- simulate_group("H")
+    
+    # round of 16
+    r16_1 <- simulate_match(winners_A[1],winners_B[2])
+    r16_2 <- simulate_match(winners_C[1],winners_D[2])
+    r16_3 <- simulate_match(winners_E[1],winners_F[2])
+    r16_4 <- simulate_match(winners_G[1],winners_H[2])
+    r16_5 <- simulate_match(winners_B[1],winners_A[2])
+    r16_6 <- simulate_match(winners_D[1],winners_C[2])
+    r16_7 <- simulate_match(winners_F[1],winners_E[2])
+    r16_8 <- simulate_match(winners_H[1],winners_G[2])
+    
+    # round of 8
+    r8_1 <- simulate_match(r16_1,r16_2)
+    r8_2 <- simulate_match(r16_3,r16_4)
+    r8_3 <- simulate_match(r16_5,r16_6)
+    r8_4 <- simulate_match(r16_7,r16_8)
+    
+    # semi-finals
+    r4_1 <- simulate_match(r8_1,r8_2)
+    r4_2 <- simulate_match(r8_3,r8_4)
+    
+    final <- simulate_match(r4_1,r4_2)
+    
+    readr::write_csv(as.tibble(t(c(k,"A",winners_A)))%>%setNames(c("iteration","Group","First", "Second")), 
+                     file = paste0("results/",group_file), append = TRUE)
+    readr::write_csv(as.tibble(t(c(k,"B",winners_B)))%>%setNames(c("iteration","Group","First", "Second")),
+                     file = paste0("results/",group_file), append = TRUE)
+    readr::write_csv(as.tibble(t(c(k,"C",winners_C)))%>%setNames(c("iteration","Group","First", "Second")),
+                     file = paste0("results/",group_file), append = TRUE)
+    readr::write_csv(as.tibble(t(c(k,"D",winners_D)))%>%setNames(c("iteration","Group","First", "Second")),
+                     file = paste0("results/",group_file), append = TRUE)
+    readr::write_csv(as.tibble(t(c(k,"E",winners_E)))%>%setNames(c("iteration","Group","First", "Second")),
+                     file = paste0("results/",group_file), append = TRUE)
+    readr::write_csv(as.tibble(t(c(k,"F",winners_F)))%>%setNames(c("iteration","Group","First", "Second")),
+                     file = paste0("results/",group_file), append = TRUE)
+    readr::write_csv(as.tibble(t(c(k,"G",winners_G)))%>%setNames(c("iteration","Group","First", "Second")),
+                     file = paste0("results/",group_file), append = TRUE)
+    readr::write_csv(as.tibble(t(c(k,"H",winners_H)))%>%setNames(c("iteration","Group","First", "Second")),
+                     file = paste0("results/",group_file), append = TRUE)
+    
+    readr::write_csv(as.tibble(final)%>%setNames(c("Winner")),
+                     file = paste0("results/",winners_file), append = TRUE) 
+  }
+}
+
+```
+
+
+
+```{r}
+total <- M*4
+paste0("results/",loop_winners_files)%>%
+  sapply(read_csv, col_names = FALSE, simplify = FALSE) %>%
+    bind_rows()%>%
+  setNames("Team")%>%
+  group_by(Team)%>%
+  summarise(prob_win = n()/total)%>%
+  arrange(desc(prob_win))%>%
+  ggplot(aes(x=prob_win,y=reorder(Team,prob_win)))+
+  geom_bar(stat = "identity")
+```
+
+# Analyze group winners
+
+```{r}
+paste0("results/",loop_group_files)%>%
+  sapply(read_csv, col_names = FALSE, simplify = FALSE) %>%
+    bind_rows()%>%
+  setNames(c("iteration", "Group", "First", "Second"))%>%
+  group_by(Group,First,Second)%>%
+  count(sort = TRUE)%>%
+  ungroup()%>%
+  group_by(Group)%>%
+  filter(n == max(n))%>%
+  arrange(Group)
+  
+```
+
+
+
+
+
+
+
+
+
