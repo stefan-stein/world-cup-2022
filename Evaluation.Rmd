@@ -1,0 +1,593 @@
+---
+title: "World Cup Evaluation"
+author:
+  - Ian Hamilton
+  - Stefan Stein
+  - David Selby
+date: January 2023
+output:
+  html_document:
+    df_print: kable
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(ggrepel)
+library(ggplot2)
+```
+
+# Group Stage
+
+```{r}
+group_stage_final_odds <- read_csv("group_stage_final_odds.csv", 
+    col_names = FALSE)%>%
+  setNames(c("Date", "Match", "Result", "odds_1", "odds_draw", "odds_2"))%>%
+  separate(Match, into = c("TeamName1", "TeamName2"), sep = "-",remove = FALSE)%>%
+  separate(Result, into = c("Goals1", "Goals2"))%>%
+  rowwise()%>%
+  mutate(outcome = ifelse(Goals1 == Goals2, "draw",
+                          ifelse(Goals1 > Goals2, TeamName1, TeamName2)))%>%
+  mutate(p_ij = 1 / odds_1,
+         p_draw = 1 / odds_draw,
+         p_ji = 1/ odds_2,
+         total_prob = p_ij + p_draw + p_ji) %>%
+  mutate(p_ij = p_ij / total_prob,
+         p_draw = p_draw / total_prob,
+         p_ji = p_ji / total_prob) %>%
+  select(-total_prob) %>%
+  mutate(logit_p_ij = log(p_ij / p_ji))
+
+group_stage_final_odds
+```
+
+```{r}
+pre_tournament_odds <- read_csv("First round odds.csv") %>%
+  rename("odds_1" = "Home win", "odds_draw" = "Draw", "odds_2" = "Away win", "TeamName1" = "Home", "TeamName2" = "Away") %>%
+  mutate(p_ij = 1 / odds_1,
+         p_draw = 1 / odds_draw,
+         p_ji = 1/ odds_2,
+         total_prob = p_ij + p_draw + p_ji) %>%
+  mutate(p_ij = p_ij / total_prob,
+         p_draw = p_draw / total_prob,
+         p_ji = p_ji / total_prob) %>%
+  select(-total_prob) %>%
+  mutate(logit_p_ij = log(p_ij / p_ji))%>%
+  rowwise()%>%
+  mutate(Match = paste0(TeamName1,"-",TeamName2))
+
+pre_tournament_odds
+```
+
+```{r}
+merged <- group_stage_final_odds%>%
+  left_join(pre_tournament_odds,by="Match",suffix=c("",".pre"))%>%
+  select(-c(Group,TeamName1.pre,TeamName2.pre, starts_with(c("odds", "Goals", "logit"))))%>%
+  mutate(market_neg_log_loss = ifelse(outcome == "draw", -log(p_draw),
+                                  ifelse(outcome == TeamName1, -log(p_ij), -log(p_ji))),
+        our_neg_log_loss = ifelse(outcome == "draw", -log(p_draw.pre),
+                                  ifelse(outcome == TeamName1, -log(p_ij.pre), -log(p_ji.pre))))%>%
+  select(-starts_with("Team"))%>%
+  arrange(Date)%>%
+  group_by(Date)%>%
+  summarise(market_day_log_loss = sum(market_neg_log_loss),
+            our_day_log_loss = sum(our_neg_log_loss))%>%
+  mutate(market_log_loss = cumsum(market_day_log_loss),
+         our_log_loss = cumsum(our_day_log_loss))
+
+merged%>%
+  select(-c(market_day_log_loss,our_day_log_loss))%>%
+  pivot_longer(cols = c("market_log_loss", "our_log_loss"))%>%
+  ggplot(aes(x=Date, y=value, colour=name)) +
+  geom_line() +
+  labs(title = "Comparison of pre-tournament odds with final market odds",
+       subtitle = "log-loss, cumulative, group stage") +
+  ylab("Cumulative negative log-loss") +
+  xlab("") +
+  theme(text = element_text(size=15),
+        legend.position="bottom")
+```
+```{r}
+(sum(merged$market_log_loss) - sum(merged$our_log_loss))
+```
+
+
+```{r}
+difference_df <- group_stage_final_odds%>%
+  left_join(pre_tournament_odds,by="Match",suffix=c("",".pre"))%>%
+  select(-c(Group,TeamName1.pre,TeamName2.pre, starts_with(c("odds", "Goals", "logit"))))%>%
+  mutate(market_neg_log_loss = ifelse(outcome == "draw", -log(p_draw),
+                                  ifelse(outcome == TeamName1, -log(p_ij), -log(p_ji))),
+        our_neg_log_loss = ifelse(outcome == "draw", -log(p_draw.pre),
+                                  ifelse(outcome == TeamName1, -log(p_ij.pre), -log(p_ji.pre))))%>%
+  select(-starts_with("Team"))%>%
+  arrange(Date)%>%
+  mutate(difference = market_neg_log_loss - our_neg_log_loss)
+
+difference_df
+```
+
+```{r}
+group_stage_by_game <- group_stage_final_odds%>%
+  left_join(pre_tournament_odds,by="Match",suffix=c("",".pre"))%>%
+  select(-c(Group,TeamName1.pre,TeamName2.pre, starts_with(c("odds", "Goals", "logit"))))%>%
+  mutate(market_neg_log_loss = ifelse(outcome == "draw", -log(p_draw),
+                                  ifelse(outcome == TeamName1, -log(p_ij), -log(p_ji))),
+        our_neg_log_loss = ifelse(outcome == "draw", -log(p_draw.pre),
+                                  ifelse(outcome == TeamName1, -log(p_ij.pre), -log(p_ji.pre))))%>%
+  select(-starts_with("Team"))%>%
+  arrange(Date)%>%
+  ungroup()%>%
+  mutate(id = as.numeric(rownames(.)))
+
+group_stage_by_game%>%
+  pivot_longer(cols = c("market_neg_log_loss", "our_neg_log_loss")) %>%
+  ggplot(aes(x = id, y = value, colour = name)) +
+  geom_line() +
+  labs(title = "Comparison of our predictions with market log-loss", 
+       subtitle = "individual games, group stage") +
+  ylab("Negative log-loss") +
+  xlab("") +
+  geom_vline(xintercept = c(40, 45, 48), linetype = "dotted") +
+  theme(text = element_text(size=15),
+        legend.position="bottom")
+
+
+
+```
+
+
+# KO Stage
+
+```{r}
+KO_stage_log_loss <- read_excel("KO stage log-loss.xlsx", 
+    sheet = "Tabelle1")%>%
+  arrange(Date)%>%
+  select(Date, everything())
+```
+
+```{r}
+# this is the old base 10 plot
+
+# KO_stage_log_loss %>%
+#   mutate(id = as.numeric(rownames(.))) %>%
+#   mutate(
+#     c_market_log_loss = cumsum(`Market log-loss`),
+#     c_our_log_loss = cumsum(`Our log-loss`)
+#   ) %>%
+#   pivot_longer(cols = c("c_market_log_loss", "c_our_log_loss")) %>%
+#   ggplot(aes(x = id, y = value, colour = name)) +
+#   geom_line() +
+#   geom_vline(xintercept = c(8.5, 12.5, 14.5), linetype = "dotted") +
+#   labs(title = "Comparison of our predictions with market log-loss", 
+#        subtitle = "cumulative, KO stage") +
+#   ylab("Cumulative negative log-loss (base 10)") +
+#   xlab("") +
+#   scale_x_continuous(
+#     breaks = c(1, 3, 5, 7, 9, 11, 13, 14, 15),
+#     labels = c(
+#       "2022-12-03",
+#       "2022-12-04",
+#       "2022-12-05",
+#       "2022-12-06",
+#       "2022-12-09",
+#       "2022-12-10",
+#       "2022-12-13",
+#       "2022-12-14",
+#       "2022-12-18"
+#     )
+#   ) +
+#   theme(axis.text.x = element_text(angle = 45, vjust = -0.0000000000001),
+#         text = element_text(size=15),
+#         legend.position="bottom")
+```
+
+```{r}
+# By how much do we lose?
+# sum(KO_stage_log_loss$`Market log-loss`) - sum(KO_stage_log_loss$`Our log-loss`)
+```
+
+```{r}
+KO_stage_log_loss %>%
+  mutate(id = as.numeric(rownames(.)),
+         base_e_market_log_loss = ifelse(Outcome == 1, -log(`Normalised market Prob Team 1`), -log(`Normalised market Prob Team 2`)),
+         base_e_our_log_loss = ifelse(Outcome == 1, -log(`Our Prob Team 1`), -log(`Our Prob Team 2`))) %>%
+  mutate(
+    c_market_log_loss = cumsum(base_e_market_log_loss),
+    c_our_log_loss = cumsum(base_e_our_log_loss)
+  ) %>%
+  pivot_longer(cols = c("c_market_log_loss", "c_our_log_loss")) %>%
+  ggplot(aes(x = id, y = value, colour = name)) +
+  geom_line() +
+  geom_vline(xintercept = c(8.5, 12.5, 14.5), linetype = "dotted") +
+  labs(title = "Comparison of our predictions with market log-loss", 
+       subtitle = "cumulative, KO stage") +
+  ylab("Cumulative negative log-loss") +
+  xlab("") +
+  scale_x_continuous(
+    breaks = c(1, 3, 5, 7, 9, 11, 13, 14, 15),
+    labels = c(
+      "2022-12-03",
+      "2022-12-04",
+      "2022-12-05",
+      "2022-12-06",
+      "2022-12-09",
+      "2022-12-10",
+      "2022-12-13",
+      "2022-12-14",
+      "2022-12-18"
+    )
+  ) +
+  theme(axis.text.x = element_text(angle = 90, vjust = -0.0000000000001),
+        text = element_text(size=15),
+        legend.position="bottom")
+```
+
+
+# Compare with xG Outcome
+
+```{r}
+xG_outcome <- read_excel("KO stage log-loss.xlsx", 
+    sheet = "Tabelle1")%>%
+  arrange(Date)%>%
+  select(Date, everything())%>%
+  mutate(xG_market_log_loss = ifelse(`xG outcome` == 1, -log(`Normalised market Prob Team 1`), -log(`Normalised market Prob Team 2`)),
+         xG_our_log_loss = ifelse(`xG outcome` == 1, -log(`Our Prob Team 1`), -log(`Our Prob Team 2`)),
+         id = as.numeric(rownames(.)))%>%
+  mutate(
+    c_market_log_loss = cumsum(xG_market_log_loss),
+    c_our_log_loss = cumsum(xG_our_log_loss)
+  ) 
+  
+```
+
+
+```{r}
+xG_outcome%>%
+  pivot_longer(cols = c("c_market_log_loss", "c_our_log_loss")) %>%
+  ggplot(aes(x = id, y = value, colour = name)) +
+  geom_line() +
+  geom_vline(xintercept = c(8.5, 12.5, 14.5), linetype = "dotted") +
+  labs(title = "Comparison of our predictions with market log-loss,",
+       subtitle = "cumulative, based on xG outcomes, KO stage") +
+  ylab("Cumulative negative log-loss") +
+  xlab("") +
+  scale_x_continuous(
+    breaks = c(1, 3, 5, 7, 9, 11, 13, 14, 15),
+    labels = c(
+      "2022-12-03",
+      "2022-12-04",
+      "2022-12-05",
+      "2022-12-06",
+      "2022-12-09",
+      "2022-12-10",
+      "2022-12-13",
+      "2022-12-14",
+      "2022-12-18"
+    )
+  ) +
+  theme(axis.text.x = element_text(angle = 90, vjust = -0.0000000000001),
+        text = element_text(size=15),
+        legend.position="bottom")
+```
+
+```{r}
+xG_outcome%>%
+  pivot_longer(cols = c("xG_market_log_loss", "xG_our_log_loss")) %>%
+  ggplot(aes(x = id, y = value, colour = name)) +
+  geom_line() +
+  labs(title = "Comparison of our predictions with market log-loss", 
+       subtitle = "individual games, KO stage, xG metric") +
+  ylab("Negative log-loss") +
+  xlab("") +
+  geom_vline(xintercept = 3, linetype = "dotted") +
+  scale_x_continuous(
+    breaks = c(1, 3, 5, 7, 9, 11, 13, 14, 15),
+    labels = c(
+      "2022-12-03",
+      "2022-12-04",
+      "2022-12-05",
+      "2022-12-06",
+      "2022-12-09",
+      "2022-12-10",
+      "2022-12-13",
+      "2022-12-14",
+      "2022-12-18"
+    )
+  ) +
+  theme(axis.text.x = element_text(angle = 90, vjust = -0.0000000000001),
+        text = element_text(size=15),
+        legend.position="bottom")
+```
+
+
+```{r}
+xG_eval <- xG_outcome%>%
+  select(c("Date","Round",starts_with("Team"),"Match outcome", starts_with("xG")))%>%
+  mutate(market_loss_minus_our_loss = xG_market_log_loss - xG_our_log_loss)
+```
+
+```{r}
+sum(xG_eval$market_loss_minus_our_loss)
+```
+
+
+
+# Betting evaluation
+
+The opportunistic bettor who always bets on the favourite team.
+
+```{r}
+opportunistic_bettor <- KO_stage_log_loss%>%
+  mutate(
+    return_team_1 = `Market Odds Team 1` - 1,
+    return_team_2 = `Market Odds Team 2` - 1,
+    betting_on = ifelse(`Normalised market Prob Team 1` >=`Normalised market Prob Team 2`, 1, 2),
+    betting_return = ifelse(Outcome == 1, 
+                            ifelse(betting_on == 1, return_team_1, -1),
+                            ifelse(betting_on == 2, return_team_2, -1))
+    )%>%
+  # select(starts_with("Team"),starts_with("betting"))
+  select(betting_on, betting_return)
+
+sum(opportunistic_bettor$betting_return) / sum(opportunistic_bettor$betting_on)
+```
+
+
+Let's look at opportunistic threshold betting.
+
+```{r}
+calculate_opportunistic_return <- function(threshold){
+  df_ <- KO_stage_log_loss %>%
+    mutate(
+      return_team_1 = `Market Odds Team 1` - 1,
+      return_team_2 = `Market Odds Team 2` - 1,
+      expected_return_team_1 = `Normalised market Prob Team 1` * return_team_1 - 1 * (1 -
+                                                                          `Normalised market Prob Team 1`),
+      expected_return_team_2 = `Normalised market Prob Team 2` * return_team_2 - 1 * (1 -
+                                                                          `Normalised market Prob Team 2`),
+      # betting_on = ifelse(
+      #   expected_return_team_1 >= threshold,
+      #   1,
+      #   ifelse(expected_return_team_2 >= threshold, 2, 0)
+      # ),
+      # IMPORTANT: Data is structured such that Team 1 is always the favourite
+      betting_on = ifelse(
+        `Normalised market Prob Team 1` >= threshold,
+        1,
+        0
+      ),
+      betting_return = ifelse(
+        Outcome == 1,
+        ifelse(betting_on == 1, return_team_1,
+               ifelse(betting_on == 2,-1, 0)),
+        ifelse(betting_on == 2, return_team_2,
+               ifelse(betting_on == 1,-1, 0))
+      ),
+      xG_betting_return = ifelse(
+        `xG outcome` == 1,
+        ifelse(betting_on == 1, return_team_1,
+               ifelse(betting_on == 2,-1, 0)),
+        ifelse(betting_on == 2, return_team_2,
+               ifelse(betting_on == 1,-1, 0))
+      )
+    ) %>%
+    # select(starts_with("Team"),starts_with("betting"))
+    select(betting_on, betting_return, xG_betting_return)
+  
+  absolute_return <- sum(df_$betting_return)
+  xG_return <- sum(df_$xG_betting_return)
+  bets_taken <- sum(df_$betting_on != 0)
+  
+  return(c(absolute_return / bets_taken, xG_return / bets_taken, bets_taken))
+  
+}
+```
+
+```{r}
+calculate_opportunistic_return(0.55)
+```
+
+```{r}
+thresholds <- seq(0.5,1,by=0.01)
+opportunistic_returns <- sapply(thresholds, FUN = calculate_opportunistic_return)
+# thresholds <- seq(0,1,by=0.01)
+# opportunistic_returns <- sapply(seq(0,1,by=0.01), FUN = calculate_opportunistic_return)
+
+as_tibble(t(opportunistic_returns), .name_repair = "universal") %>%
+  setNames(c("actual", "xG", "bets_taken")) %>%
+  mutate(threshold = thresholds) %>%
+  filter(bets_taken >= 5)%>%
+  pivot_longer(cols = c("actual", "xG"), names_to = "outcome_type") %>%
+  ggplot(aes(x = threshold, y = value, colour = outcome_type)) +
+  geom_line() +
+  labs(title = "Betting returns as percentage of money wagered") +
+  ylab("Betting return") +
+  xlab("Market probability of winning") +
+  theme(
+    text = element_text(size = 15),
+    legend.position = "bottom"
+  ) 
+```
+
+
+
+
+
+```{r}
+betting_threshold <- 1
+
+KO_stage_log_loss%>%
+  mutate(
+    return_team_1 = `Market Odds Team 1` - 1,
+    return_team_2 = `Market Odds Team 2` - 1,
+    expected_return_team_1 = `Our Prob Team 1`*return_team_1 - 1 * (1-`Our Prob Team 1`),
+    expected_return_team_2 = `Our Prob Team 2`*return_team_2 - 1 * (1-`Our Prob Team 2`),
+    betting_on = ifelse(expected_return_team_1 >= betting_threshold, 1,
+                        ifelse(expected_return_team_2 >= betting_threshold, 2, 0)),
+    betting_return = ifelse(Outcome == 1, 
+                            ifelse(betting_on == 1, return_team_1,
+                                   ifelse(betting_on == 2, -1, 0)),
+                            ifelse(betting_on == 2, return_team_2,
+                                   ifelse(betting_on == 1, -1, 0)))
+    )%>%
+  # select(starts_with("Team"),starts_with("betting"))
+  select(betting_on, betting_return)
+```
+
+```{r}
+calculate_return <- function(threshold){
+  df_ <- KO_stage_log_loss %>%
+    mutate(
+      return_team_1 = `Market Odds Team 1` - 1,
+      return_team_2 = `Market Odds Team 2` - 1,
+      expected_return_team_1 = `Our Prob Team 1` * return_team_1 - 1 * (1 -
+                                                                          `Our Prob Team 1`),
+      expected_return_team_2 = `Our Prob Team 2` * return_team_2 - 1 * (1 -
+                                                                          `Our Prob Team 2`),
+      betting_on = ifelse(
+        expected_return_team_1 >= threshold,
+        1,
+        ifelse(expected_return_team_2 >= threshold, 2, 0)
+      ),
+      betting_return = ifelse(
+        Outcome == 1,
+        ifelse(betting_on == 1, return_team_1,
+               ifelse(betting_on == 2,-1, 0)),
+        ifelse(betting_on == 2, return_team_2,
+               ifelse(betting_on == 1,-1, 0))
+      ),
+      xG_betting_return = ifelse(
+        `xG outcome` == 1,
+        ifelse(betting_on == 1, return_team_1,
+               ifelse(betting_on == 2,-1, 0)),
+        ifelse(betting_on == 2, return_team_2,
+               ifelse(betting_on == 1,-1, 0))
+      )
+    ) %>%
+    # select(starts_with("Team"),starts_with("betting"))
+    select(betting_on, betting_return, xG_betting_return)
+  
+  absolute_return <- sum(df_$betting_return)
+  xG_return <- sum(df_$xG_betting_return)
+  bets_taken <- sum(df_$betting_on != 0)
+  
+  return(c(absolute_return / bets_taken, xG_return / bets_taken, bets_taken))
+  
+}
+```
+
+```{r}
+returns <- sapply(seq(0,0.5,by=0.01), FUN = calculate_return)
+```
+
+```{r}
+as_tibble(t(returns), .name_repair = "universal") %>%
+  setNames(c("actual", "xG", "bets_taken")) %>%
+  mutate(threshold = seq(0, 0.5, by = 0.01)) %>%
+  # filter(bets_taken >= 5)%>%
+  pivot_longer(cols = c("actual", "xG"), names_to = "outcome_type") %>%
+  ggplot(aes(x = threshold, y = value, colour = outcome_type)) +
+  geom_line() +
+  labs(title = "Betting returns as percentage of money wagered") +
+  ylab("Betting return") +
+  xlab("Confidence threshold") +
+  theme(
+    text = element_text(size = 15),
+    legend.position = "bottom"
+  ) +
+  geom_vline(xintercept = 0.35, linetype = "dotted")
+
+```
+
+
+```{r}
+as_tibble(t(returns), .name_repair = "unique")%>%
+  setNames(c("Return", "Bets_taken"))%>%
+  mutate(threshold = seq(0,0.5,by=0.01))%>%
+  ggplot(aes(x=threshold, y=Return)) +
+  geom_line() +
+  labs(title = "Betting return based on betting threshold")
+```
+
+What is the max return? Attained for threshold between 0.07 and 0.10.
+
+```{r}
+max(returns[1,])
+```
+
+
+
+
+```{r}
+as_tibble(t(returns), .name_repair = "unique")%>%
+  setNames(c("return", "xG_return", "bets_taken"))%>%
+  mutate(threshold = seq(0,0.5,by=0.01))%>%
+  ggplot(aes(x=threshold, y=bets_taken)) +
+  geom_line() +
+  labs(title = "Number of bets taken based on betting threshold") +
+  ylab("Betting return") +
+  xlab("Confidence threshold") +
+  theme(
+    text = element_text(size = 15),
+    legend.position = "bottom"
+  ) +
+  geom_vline(xintercept = 0.35, linetype = "dotted")
+```
+
+# Extremising
+
+```{r}
+sim_winners_files <- c("winners1.csv", "winners2.csv", "winners3.csv", "winners4.csv")
+tbl <-
+    paste("results_10000/", sim_winners_files, sep = "") %>% 
+    map_df(~read_csv(., col_names = FALSE))%>%
+  count(X1)%>%
+  mutate(n = n / 10000)%>%
+  setNames(c("Team", "sim_p_win"))
+```
+
+```{r}
+winner <- read_csv("Winner odds.csv")%>%
+  # filter(Odds < 100)%>%
+  mutate(p_i = 1 / Odds,
+         total_prob = sum(p_i))%>%
+  mutate(p_i = p_i / total_prob)%>%
+  select(Group, Team, p_i)%>%
+  # select(Team, p_i)%>%
+  rename("p_win" = "p_i")
+```
+
+```{r}
+winner%>%
+  left_join(tbl, by = "Team")%>%
+  replace(is.na(.), 0) %>%
+  mutate(label = ifelse(Team %in% c("Denmark", "Brazil", "Argentina", "England"), Team, "")) %>%
+  ggplot(aes(x = p_win, y = sim_p_win,label = label)) +
+  geom_point() +
+  geom_text()
+```
+
+
+
+```{r}
+winner%>%
+  left_join(tbl, by = "Team")%>%
+  replace(is.na(.), 0) %>%
+  mutate(label = ifelse(Team %in% c("Brazil", "Argentina", "England", "France", "Spain", "Netherlands"), Team, "")) %>%
+  ggplot(aes(x = p_win, y = sim_p_win,label = label)) +
+  geom_point() +
+  xlim(0,0.4) +
+  ylim(0,0.4) +
+  xlab("Market winning probability") +
+  ylab("Winning probability simulated") +
+  geom_abline(colour = "gray") +
+  geom_text_repel(vjust=-0.5)
+
+```
+
